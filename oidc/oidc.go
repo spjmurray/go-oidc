@@ -84,10 +84,34 @@ func InsecureIssuerURLContext(ctx context.Context, issuerURL string) context.Con
 	return context.WithValue(ctx, issuerURLKey, issuerURL)
 }
 
+// HeaderInjectionFunc allows a client to inject headers into requests.
+type HeaderInjectFunc func(http.Header)
+
+type headerInjectContextKey int
+
+var headerInjectKey headerInjectContextKey
+
+// HeaderInjectClientContext allows a callback to be registered that can inject headers
+// into any requests that are boing made, for example traceparent" used for W3C trace
+// context propagation.
+func HeaderInjectClientContext(ctx context.Context, f HeaderInjectFunc) context.Context {
+	return context.WithValue(ctx, headerInjectKey, f)
+}
+
+func getHeaderInjector(ctx context.Context) HeaderInjectFunc {
+	if f, ok := ctx.Value(headerInjectKey).(HeaderInjectFunc); ok {
+		return f
+	}
+	return nil
+}
+
 func doRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	client := http.DefaultClient
 	if c := getClient(ctx); c != nil {
 		client = c
+	}
+	if f := getHeaderInjector(ctx); f != nil {
+		f(req.Header)
 	}
 	return client.Do(req.WithContext(ctx))
 }

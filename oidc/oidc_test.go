@@ -21,6 +21,9 @@ const (
 	// following values computed by own algo for regression testing
 	computed384TokenHash = "_ILKVQjbEzFKNJjUKC2kz9eReYi0A9Of"
 	computed512TokenHash = "Spa_APgwBrarSeQbxI-rbragXho6dqFpH5x9PqaPfUI"
+	// simulation of w3x trace context.
+	traceParentHeader = "traceparent"
+	traceParentValue  = "00-632e7a4614cc94740b7512c6fdae84f7-e21ef17de25175a8-01"
 )
 
 type accessTokenTest struct {
@@ -121,6 +124,8 @@ func TestNewProvider(t *testing.T) {
 		wantIssuerURL     string
 		wantAlgorithms    []string
 		wantErr           bool
+		headerInjectFunc  HeaderInjectFunc
+		wantHeader        map[string][]string
 	}{
 		{
 			name: "basic_case",
@@ -271,6 +276,27 @@ func TestNewProvider(t *testing.T) {
  ]
 }`,
 		},
+		{
+			name: "header_injection",
+			data: `{
+                                "issuer": "ISSUER",
+                                "authorization_endpoint": "https://example.com/auth",
+                                "token_endpoint": "https://example.com/token",
+                                "jwks_uri": "https://example.com/keys",
+                                "id_token_signing_alg_values_supported": ["RS256"]
+                        }`,
+			wantAuthURL:    "https://example.com/auth",
+			wantTokenURL:   "https://example.com/token",
+			wantAlgorithms: []string{"RS256"},
+			headerInjectFunc: func(h http.Header) {
+				h.Add(traceParentHeader, traceParentValue)
+			},
+			wantHeader: map[string][]string{
+				traceParentHeader: {
+					traceParentValue,
+				},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -278,7 +304,9 @@ func TestNewProvider(t *testing.T) {
 			defer cancel()
 
 			var issuer string
+			var header http.Header
 			hf := func(w http.ResponseWriter, r *http.Request) {
+				header = r.Header
 				if r.URL.Path != "/.well-known/openid-configuration" {
 					http.NotFound(w, r)
 					return
@@ -298,6 +326,10 @@ func TestNewProvider(t *testing.T) {
 				ctx = InsecureIssuerURLContext(ctx, test.issuerURLOverride)
 			}
 
+			if test.headerInjectFunc != nil {
+				ctx = HeaderInjectClientContext(ctx, test.headerInjectFunc)
+			}
+
 			p, err := NewProvider(ctx, issuer)
 			if err != nil {
 				if !test.wantErr {
@@ -312,6 +344,16 @@ func TestNewProvider(t *testing.T) {
 			if test.wantIssuerURL != "" && p.issuer != test.wantIssuerURL {
 				t.Errorf("NewProvider() unexpected issuer value, got=%s, want=%s",
 					p.issuer, test.wantIssuerURL)
+			}
+
+			if test.wantHeader != nil {
+				for k, v := range test.wantHeader {
+					actual := header.Values(k)
+
+					if !reflect.DeepEqual(v, actual) {
+						t.Errorf("NewProvider() expected header %s value %v, got %v", k, v, actual)
+					}
+				}
 			}
 
 			if p.authURL != test.wantAuthURL {
